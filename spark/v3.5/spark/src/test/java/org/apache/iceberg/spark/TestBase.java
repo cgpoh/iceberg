@@ -232,15 +232,35 @@ public abstract class TestBase extends SparkTestHelperBase {
   }
 
   protected String tablePropsAsString(Map<String, String> tableProps) {
+    return tablePropsAsString(tableProps, "", ", ");
+  }
+
+  //  protected String tablePropsAsString(Map<String, String> tableProps) {
+  //    StringBuilder stringBuilder = new StringBuilder();
+  //
+  //    for (Map.Entry<String, String> property : tableProps.entrySet()) {
+  //      if (stringBuilder.length() > 0) {
+  //        stringBuilder.append(", ");
+  //      }
+  //      stringBuilder.append(String.format("'%s' '%s'", property.getKey(), property.getValue()));
+  //    }
+  //
+  //    return stringBuilder.toString();
+  //  }
+
+  protected String tablePropsAsString(
+      Map<String, String> tableProps, String kvSeparator, String propertySeparator) {
     StringBuilder stringBuilder = new StringBuilder();
 
     for (Map.Entry<String, String> property : tableProps.entrySet()) {
       if (stringBuilder.length() > 0) {
-        stringBuilder.append(", ");
+        stringBuilder.append(propertySeparator);
       }
-      stringBuilder.append(String.format("'%s' '%s'", property.getKey(), property.getValue()));
+      stringBuilder.append(
+          String.format(
+              "'%s'%s'%s'",
+              property.getKey(), kvSeparator, property.getValue(), propertySeparator));
     }
-
     return stringBuilder.toString();
   }
 

@@ -24,8 +24,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assumptions.assumeThat;
 
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSortedMap;
+import org.apache.iceberg.relocated.com.google.common.collect.Ordering;
 import java.io.File;
 import java.nio.file.Files;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.PartitionSpec;
@@ -44,6 +49,22 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.TestTemplate;
 
 public class TestCreateTable extends CatalogTestBase {
+  private static final Map<String, String> DEFAULT_TABLE_PROPERTIES =
+      ImmutableSortedMap.of(
+          "current-snapshot-id", "none",
+          "format", "iceberg/parquet");
+  private static final Map<String, String> DEFAULT_V1_TABLE_PROPERTIES =
+      new ImmutableSortedMap.Builder(Ordering.natural())
+          .putAll(DEFAULT_TABLE_PROPERTIES)
+          .put("format-version", "1")
+          .build();
+
+  private static final Map<String, String> DEFAULT_V2_TABLE_PROPERTIES =
+      new ImmutableSortedMap.Builder(Ordering.natural())
+          .putAll(DEFAULT_TABLE_PROPERTIES)
+          .put("format-version", "2")
+          .put("write.parquet.compression-codec", "zstd")
+          .build();
 
   @AfterEach
   public void dropTestTable() {
@@ -113,6 +134,12 @@ public class TestCreateTable extends CatalogTestBase {
     assertThat(table.properties().get(TableProperties.DEFAULT_FILE_FORMAT))
         .as("Should not have the default format set")
         .isNull();
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  data STRING)",
+        table.location(),
+        DEFAULT_V2_TABLE_PROPERTIES);
   }
 
   @TestTemplate
@@ -177,6 +204,15 @@ public class TestCreateTable extends CatalogTestBase {
         .as("Should not have default format parquet")
         .isEqualTo("parquet");
 
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  data STRING)",
+        table.location(),
+        new ImmutableSortedMap.Builder(Ordering.natural())
+            .putAll(DEFAULT_V2_TABLE_PROPERTIES)
+            .put("write.format.default", "parquet")
+            .build());
+
     assertThatThrownBy(
             () ->
                 sql(
@@ -223,6 +259,15 @@ public class TestCreateTable extends CatalogTestBase {
     assertThat(table.properties().get(TableProperties.DEFAULT_FILE_FORMAT))
         .as("Should not have the default format set")
         .isNull();
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  created_at TIMESTAMP,\n  category STRING,\n  data STRING)",
+        table.location(),
+        DEFAULT_V2_TABLE_PROPERTIES,
+        "PARTITIONED BY (category, days(created_at))",
+        "CLUSTERED BY (id)\nINTO 8 BUCKETS",
+        null);
   }
 
   @TestTemplate
@@ -251,6 +296,12 @@ public class TestCreateTable extends CatalogTestBase {
     assertThat(table.properties().get(TableProperties.DEFAULT_FILE_FORMAT))
         .as("Should not have the default format set")
         .isNull();
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL COMMENT 'Unique identifier',\n  data STRING COMMENT 'Data value')",
+        table.location(),
+        DEFAULT_V2_TABLE_PROPERTIES);
   }
 
   @TestTemplate
@@ -283,6 +334,13 @@ public class TestCreateTable extends CatalogTestBase {
     assertThat(table.properties().get(TableCatalog.PROP_COMMENT))
         .as("Should have the table comment set in properties")
         .isEqualTo("Table doc");
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  data STRING)",
+        table.location(),
+        DEFAULT_V2_TABLE_PROPERTIES,
+        "COMMENT 'Table doc'");
   }
 
   @TestTemplate
@@ -309,6 +367,12 @@ public class TestCreateTable extends CatalogTestBase {
 
     Table table = validationCatalog.loadTable(tableIdent);
     assertThat(table).as("Should load the new table").isNotNull();
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  data STRING)",
+        table.location(),
+        DEFAULT_V2_TABLE_PROPERTIES);
 
     StructType expectedSchema =
         StructType.of(
@@ -338,6 +402,17 @@ public class TestCreateTable extends CatalogTestBase {
         tableName);
 
     Table table = validationCatalog.loadTable(tableIdent);
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  data STRING)",
+        table.location(),
+        new ImmutableSortedMap.Builder(Ordering.natural())
+            .putAll(DEFAULT_V2_TABLE_PROPERTIES)
+            .put("p1", "2")
+            .put("p2", "x")
+            .build());
+
     assertThat(table).as("Should load the new table").isNotNull();
 
     StructType expectedSchema =
@@ -435,6 +510,13 @@ public class TestCreateTable extends CatalogTestBase {
         .isEqualTo(1);
 
     sql("ALTER TABLE %s SET TBLPROPERTIES ('format-version'='2')", tableName);
+
+    validateExpectedShowCreateTable(
+        tableName,
+        "(\n  id BIGINT NOT NULL,\n  data STRING)",
+        table.location(),
+        DEFAULT_V2_TABLE_PROPERTIES);
+
     assertThat(ops.refresh().formatVersion())
         .as("should update table to use format v2")
         .isEqualTo(2);
@@ -464,5 +546,66 @@ public class TestCreateTable extends CatalogTestBase {
         .cause()
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("Cannot downgrade v2 table to v1");
+  }
+
+  private void validateExpectedShowCreateTable(
+      String tableName,
+      String expectedSchema,
+      String expectedLocation,
+      Map<String, String> expectedProperties) {
+    validateExpectedShowCreateTable(
+        tableName, expectedSchema, expectedLocation, expectedProperties, null, null, null);
+  }
+
+  private void validateExpectedShowCreateTable(
+      String tableName,
+      String expectedSchema,
+      String expectedLocation,
+      Map<String, String> expectedProperties,
+      String comment) {
+    validateExpectedShowCreateTable(
+        tableName, expectedSchema, expectedLocation, expectedProperties, null, null, comment);
+  }
+
+  private void validateExpectedShowCreateTable(
+      String tableName,
+      String expectedSchema,
+      String expectedLocation,
+      Map<String, String> expectedProperties,
+      String partitionClause,
+      String bucketClause,
+      String comment) {
+    StringBuilder expectedCreate = new StringBuilder();
+
+    expectedCreate.append(
+        String.format(
+            "CREATE TABLE %s ",
+            (catalogName.equals("spark_catalog") ? "spark_catalog." : "") + tableName));
+
+    expectedCreate.append(expectedSchema + "\n");
+    expectedCreate.append("USING iceberg\n");
+    if (comment != null) {
+      expectedCreate.append(comment + "\n");
+    }
+
+    if (partitionClause != null) {
+      expectedCreate.append(partitionClause + "\n");
+    }
+
+    if (bucketClause != null) {
+      expectedCreate.append(bucketClause + "\n");
+    }
+
+    expectedCreate.append(String.format("LOCATION '%s'\n", expectedLocation));
+    expectedCreate.append("TBLPROPERTIES (\n  ");
+    expectedCreate.append(tablePropsAsString(expectedProperties, " = ", ",\n  "));
+    expectedCreate.append(")\n");
+
+    List<Object[]> actualCreate = sql("SHOW CREATE table %s", tableName);
+
+    assertEquals(
+        "Should have expected create",
+        ImmutableList.of(row(expectedCreate.toString())),
+        actualCreate);
   }
 }
